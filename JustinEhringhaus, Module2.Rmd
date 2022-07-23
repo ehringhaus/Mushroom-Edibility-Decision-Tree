@@ -3,6 +3,7 @@ title: "Module 2 Technique Practice: Decision Trees"
 author: "Justin Ehringhaus"
 date: "July 23, 2022"
 output:
+  # github_document: default
   html_document: default
 bibliography: "JustinEhringhaus, references.bib"
 nocite: '@*'
