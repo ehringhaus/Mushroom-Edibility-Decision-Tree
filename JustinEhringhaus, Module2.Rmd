@@ -1,0 +1,184 @@
+---
+title: "Module 2 Technique Practice: Decision Trees"
+author: "Justin Ehringhaus"
+date: "July 23, 2022"
+output:
+  html_document: default
+bibliography: "JustinEhringhaus, references.bib"
+nocite: '@*'
+---
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(pacman)
+p_load(tidyverse)
+p_load(ggthemes)
+p_load(cowplot)
+p_load(rpart)
+p_load(caret)
+p_load(rpart.plot)
+p_load(rattle)
+```
+
+---
+
+```{r}
+#Reading the data set as a dataframe
+mushrooms <- readxl::read_excel("/Users/justin/Desktop/ALY 6040/Homework/M2/mushrooms.xlsx")
+
+# structure of the data
+str(mushrooms)
+
+# number of rows with missing values
+nrow(mushrooms) - sum(complete.cases(mushrooms))
+
+# deleting redundant variable `veil.type`
+mushrooms$`veil-type` <- NULL
+
+# counting unique values for each column in mushrooms
+lapply(mushrooms, table)
+```
+
+The mushrooms dataset is comprised entirely of categorical character variables, and there are zero missing values. Although lacking a data dictionary, the letters appear to lack order, and thus we can assume the categorical data is nominal as opposed to ordinal. For instance, the `class` variable likely refers to edible (e) and poisonous (p). Furthermore, counting the unique values from each variable reveals a significant number of entries for each unique value, and thus we can assume there are no data entry errors or outliers in the dataset. No further cleaning of the data is necessary.
+
+```{r}
+#analyzing the odor variable
+table(mushrooms$class, mushrooms$odor)
+```
+
+The table above counts the number of edible versus poisonous mushrooms by type of odor. Odor appears to be a nearly perfect indicator of edibility, and it is only in the case of `odor = n` where edibility is slightly ambiguous. Thus, using `odor` will likely be an important classifier of `class` when building a model, as it can be used to reduce entropy and maximize information gain because of the many instances of perfect splits, where the particular odor perfectly indicates edibility.
+
+```{r}
+number.perfect.splits <- apply(X = mushrooms[-1], MARGIN = 2, FUN = function(col) {
+  t <- table(mushrooms$class, col)
+  sum(t == 0)
+})
+
+# Descending order of perfect splits
+order <- order(number.perfect.splits, decreasing = TRUE)
+number.perfect.splits <- number.perfect.splits[order]
+number.perfect.splits
+
+# Plot graph
+par(mar = c(10,2,2,2))
+barplot(number.perfect.splits,
+        main = "Number of perfect splits vs feature",
+        xlab = "", ylab = "Feature", las = 2, col = "wheat")
+```
+
+`number.perfect.splits` and the accompanying visualization confirms our hypothesis above. `odor` is not only a great indicator of edibility (`class`), it is the best classifier of edibility among the variables in our dataset. `odor` contains `r as.integer(number.perfect.splits["odor"])` perfect splits out of `r length(unique(mushrooms$odor))` unique values.
+
+```{r}
+best_splits_visualized <- 
+  mushrooms %>% 
+  ggplot +
+  aes(`stalk-color-above-ring`, `stalk-color-below-ring`, color = `class`) +
+  geom_jitter(alpha = 0.4, position = "jitter") +
+  facet_wrap(~ odor, labeller = label_both) +
+  scale_color_manual(labels = c('edible', 'poisonous'),
+                     values = c("green", "red")) +
+  labs(
+    title = "Good classifiers, clear clusters"
+  ) +
+  theme_tufte()
+
+worst_splits_visualized <- 
+  mushrooms %>% 
+  ggplot +
+  aes(`stalk-surface-above-ring`, `stalk-surface-below-ring`, color = `class`) +
+  geom_jitter(alpha = 0.4, position = "jitter") +
+  facet_wrap(~ `stalk-shape`, labeller = label_both) +
+  scale_color_manual(labels = c('edible', 'poisonous'),
+                     values = c("green", "red")) +
+  labs(
+    title = "Not so good classifiers, unclear clusters"
+  ) +
+  theme_tufte()
+
+plot_grid(best_splits_visualized,
+          worst_splits_visualized)
+```
+
+To visually examine how certain variables are better at classifying `class` than other variables, we can examine how clusters of edible and poisonous mushrooms when comparing variables against each other. The plot on the left examines variables that contain many instances of perfect splits (i.e., good classifiers), whereas the plot on the right examines variables that contain few, or zero, instances of perfect splits (i.e., bad classifiers). The left plot illustrates how clusters of edible mushrooms versus poisonous mushrooms are easily distinguishable, whereas the right plot illustrates how there is a lot of overlap and ambiguity between poisonous and non-poisonous mushrooms. 
+
+```{r}
+#data splicing
+set.seed(12345)
+train <- sample(1:nrow(mushrooms), size = ceiling(0.80 * nrow(mushrooms)), replace = FALSE)
+# training set
+mushrooms_train <- mushrooms[train,]
+# test set
+mushrooms_test <- mushrooms[-train,]
+
+nrow(mushrooms_train)
+nrow(mushrooms_test)
+```
+
+80% of the data has randomly been placed into a training set and 20% into a test set. The training set will be used to create a decision tree, and the test set will be used to test the resulting model's accuracy.
+
+```{r}
+# penalty matrix
+penalty.matrix <- matrix(c(0, 1, 10, 0), byrow = TRUE, nrow = 2)
+
+# building the classification tree with rpart
+tree <- rpart(formula = class ~ .,
+              data = mushrooms_train,
+              parms = list(loss = penalty.matrix),
+              method = "class")
+
+# Details of the decision tree
+summary(tree)
+
+# Visualize the decision tree with rpart.plot
+rpart.plot(tree, nn = TRUE)
+```
+
+The `rpart` function [@rpart] built a model separating mushrooms into six groups, and many variables in the dataset do not appear in the resultant model as they were not deemed important enough for classifying the `class` variable. `odor` was used in Node 1 as the best classifier for splitting the data into two groups just as we had manually discovered in our exploration of best splits above. Having split the data by `odor`, the next best classifiers are found for each resulting subgroup. This process repeats recursively until no further splitting is possible or necessary.
+
+The major question to ask of such a model is whether it is too complex, too specific, or too sensitive. In other words, did the recursive process of splitting the data into groups and subgroups continue on for too long. When should the splitting stop? In the next step, we will adjust the complexity parameter to prune the tree in an attempt to simplify the model.
+
+```{r}
+# choosing the best complexity parameter "cp" to prune the tree
+cp.optim <- tree$cptable[which.min(tree$cptable[,"xerror"]), "CP"]
+
+# tree prunning using the best complexity parameter
+tree <- prune(tree, cp = cp.optim)
+
+# Details of the pruned decision tree
+summary(tree)
+```
+
+The summary of the pruned tree reveals that no improvements to the model have been made. Now that we have accomplished what we can with training data, we will move on to making predictions of `class` by applying data that the model has no awareness of (the test data). This will help us to assess the model for its accuracy, sensitivity, and specificity to see whether it overfits or underfits new data fed into it.
+
+```{r}
+#Testing the model
+pred <- predict(object = tree, mushrooms_test[-1], type = "class")
+
+#Calculating accuracy
+t <- table(mushrooms_test$class, pred)
+
+confusionMatrix(t)
+ctable <- as.table(confusionMatrix(t))
+fourfoldplot(ctable, 
+             color = c("brown1", "chartreuse1"), 
+             conf.level = 0, 
+             margin = 1, 
+             main = "Confusion Matrix")
+```
+
+The details of the confusion matrix and the accompanying visualization of it reveal that the model has 100% accuracy, or in other words, when the test data was fed into the model, the model predicted with 100% accuracy whether a mushroom was edible or poisonous.
+
+In some cases, 100% accuracy may indicate overfitting. In the real world, 100% accuracy is rare, as data is usually messier. Thus, one should be skeptical if their model predicts perfectly. Perhaps they made an error in splitting training and test data — perhaps their test data is partly comprised of training data, and thus the model has actually seen the data already.
+
+In this case, the dataset itself is likely perfect enough for 100% accuracy to be possible. There are enough variables and enough data to build a model that predicts without error whether a given mushroom is poisonous or edible. However, that does not mean the model is useful or practical. As it stands, one would need to collect data in the exact same format, using the exact same variables and values, before feeding it to the model to make a decision. This requires an expert eye that the general public does not have. 
+
+A more useful model might incorporate machine learning methods to classify mushrooms based on visual data. Although such a model may experience a decrease in accuracy, it would enable instantaneous classification of the edibility of mushrooms using just a camera in a smartphone. This may justify a decrease in accuracy, as it increases practicality and usability. At the same time, one should always consider ethicality. Is it ethical to release a model to the general public that is not 100% accurate, especially when the model assists in decision making that could be harmful to the health of its users?
+
+Another thought about the edibility of mushrooms is whether all edible mushrooms are equally safe to consume. For example, the dataset as it stands contains no data on whether the mushrooms contain psilocybins. A mushroom might be edible, but it could contain psilocybins resulting in undesirable side-effects if eaten. Thus, I would recommend further data collection efforts to incorporate more classes other than just edible versus poisonous. Of course, this depends on the use case and the particular business problem, but we can assume that most people would want to know not only whether it is safe to eat a mushroom, but whether they should expect any psychological or visual side-effects after consumption. 
+
+## Works Cited:
