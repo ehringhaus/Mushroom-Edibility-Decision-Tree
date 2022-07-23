@@ -29,7 +29,7 @@ p_load(rattle)
 
 ```{r}
 #Reading the data set as a dataframe
-mushrooms <- readxl::read_excel("/Users/justin/Desktop/ALY 6040/Homework/M2/mushrooms.xlsx")
+mushrooms <- readxl::read_excel("/Users/justin/Desktop/ALY 6040/Homework/M2/Mushroom-Edibility-Decision-Tree/mushrooms.xlsx")
 
 # structure of the data
 str(mushrooms)
